@@ -1,2 +1,2 @@
-# prg2
-Cvičení z Programování II
+# Cvičení z Programování II
+
