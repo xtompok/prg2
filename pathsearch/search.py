@@ -33,11 +33,14 @@ for v in nodes.values():
 for k in sorted(histogram.keys()):
     print("{} : {}".format(k,histogram[k]))
 
-wgs = pyproj.Proj("+init=epsg:4326")
+wgs = pyproj.Proj( "+init=epsg:4326")
 jtsk = pyproj.Proj("+init=epsg:5514")
-def utm2wgs(coords):
+def jtsk2wgs(coords):
     return pyproj.transform(jtsk,wgs,coords[0],coords[1])
 #    return pyproj.transform(jtsk,wgs,*coords)
+
+def wgs2jtsk(coords):
+    return pyproj.transform(wgs,jtsk,coords[0],coords[1])
 
 def seg_length(pt1, pt2):
     """Spočítá vzdálenost mezi body pt1 a pt2 zadanými v metrickém zobrazení"""
@@ -54,16 +57,69 @@ def linestring_length(coords):
         mempt = pt
     return length
 
-G = nx.Graph()
-G.add_nodes_from(nodes.keys())
-print("Features: {}".format(len(segments["features"])))
-for f in segments["features"]:
-    coords = f["geometry"]["coordinates"]
-    length = linestring_length(coords)
-    props = f["properties"]
-    props["length"] = length
-    G.add_edge(tuple(coords[0]),tuple(coords[-1]),**props)
+def create_graph(nodes,segments):
+    G = nx.Graph()
+    G.add_nodes_from(nodes.keys())
+    print("Features: {}".format(len(segments["features"])))
+    for f in segments["features"]:
+        coords = f["geometry"]["coordinates"]
+        length = linestring_length(coords)
+        props = f["properties"]
+        props["length"] = length
+        G.add_edge(tuple(coords[0]),tuple(coords[-1]),**props)
 
-print(nx.shortest_path(G,
-    (-734298.7599533685, -1045994.1000395045 ),
-    (-734661.9999935701, -1048392.0000447445),'length'))
+    maxvertices = 0
+    maxcomp = None
+    for comp in nx.connected_components(G):
+        comp = set(comp)
+        if len(comp) > maxvertices:
+            maxcomp = comp
+            maxvertices = len(comp)
+    return G.subgraph(maxcomp)
+
+G = create_graph(nodes,segments)
+
+def find_nearest_node(x,y):
+    """Vrátí nejbližší vrchol grafu k zadaným souřadnicím"""
+    minlen = float('inf')
+    minlennode = None
+    for n in G.nodes:
+        len = seg_length((x,y),n)
+        if len < minlen:
+            minlen = len
+            minlennode = n
+    return minlennode
+
+def search_path(fromlon,fromlat, tolon, tolat):
+    # Převedeme WGS na JTSK
+    (fromx,fromy) = wgs2jtsk((fromlon,fromlat))
+    (tox, toy) = wgs2jtsk((tolon,tolat))
+    print("flon: {}, flat: {}, fx: {}, fy: {}".format(fromlon,fromlat,fromx,fromy))
+    # Najdeme nejbližší vrcholy grafu k zadaným souřadnicím
+    fromnode = find_nearest_node(fromx,fromy)
+    tonode = find_nearest_node(tox,toy)
+    # Najdeme nejkratší cestu
+    path = nx.shortest_path(G,fromnode,tonode,'length')
+    # Převedeme nejkratší cestu zpět do WGS
+    wgspath = [jtsk2wgs(n) for n in path]
+    return wgspath
+
+def save_to_geojson(path,filename):
+    outjson = {"type": "FeatureCollection",
+               "features": [{
+                  "type" : "Feature",
+                  "geometry": {
+                      "type": "LineString",
+                    "coordinates": path
+                  }
+               }]
+    }
+    with open(filename,"w") as f:
+        json.dump(outjson,f)
+
+
+
+path = search_path(14.4299708,50.0624341,15,50)
+save_to_geojson(path,"output.json")
+
+
